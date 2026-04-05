@@ -1,31 +1,60 @@
-# HashDiff — Claude Code Context
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project
-Windows desktop утилита для сравнения файлов по MD5 хешу. Drag & drop в два столбца, зелёный/красный результат.
+
+Windows desktop utility for comparing files by MD5 hash. Drag & drop into two columns, green/red result. **`src/` does not exist yet — this project needs to be implemented.**
 
 ## Stack
-- **Language:** Python 3.11
-- **GUI:** customtkinter + tkinterdnd2
-- **Hashing:** hashlib.md5 (streaming)
-- **Threading:** threading.Thread (daemon)
-- **Build:** PyInstaller --onefile --windowed
 
-## Key Rules
+- Python 3.11, customtkinter + tkinterdnd2, hashlib.md5 (streaming), threading.Thread (daemon)
+- Build: PyInstaller --onefile --windowed → `dist/HashDiff.exe`
 
-### Threading (CRITICAL)
-- MD5 вычисляется ТОЛЬКО в worker threads
-- UI обновляется ТОЛЬКО в main thread
-- Переход из worker → main: `root.after(0, callback)`
-- Никогда не вызывай tkinter методы из worker thread
+## Commands
 
-### File Paths
-- Всегда использовать `pathlib.Path`, никогда `str` для путей
-- `open(path, 'rb')` для хеширования (бинарный режим)
-- Это решает кириллику и длинные пути
+```bat
+# Install dependencies
+pip install -r requirements.txt
 
-### MD5 Hashing
+# Run all tests (parallel)
+pytest tests/ -n auto
+
+# Run a single test
+pytest tests/test_hasher.py::test_compute_md5 -v
+
+# Build exe (Windows)
+build.bat
+```
+
+## Architecture & Data Flow
+
+Single-process desktop app. The central object is `AppState` (in `app.py`), which owns `left_files`, `right_files` (lists of `FileEntry`), and `pairs` (list of `FilePair`).
+
+**Event flow when a file is dropped:**
+1. `DropZone.on_drop` → parse paths → create `FileEntry` objects → add to `AppState`
+2. `AppState` calls `compute_pairs()` (matcher.py) → rebuilds `pairs` list
+3. UI calls `refresh_ui()` → recreates `PairRow` widgets from pairs
+4. For each new entry: `hash_file_async(entry, on_hash_complete)` spawns a daemon thread
+5. Worker thread computes MD5, sets `entry.md5 / entry.status`, then calls `on_complete(entry)`
+6. `on_complete` must use `root.after(0, callback)` to re-enter main thread
+7. Main thread calls `recompute_pairs()` + `refresh_ui()` again
+
+**Matching algorithm** (`matcher.py`): Pass 1 — match by filename (no path). Pass 2 — remaining files matched by insertion order. Files without a pair get `status='unpaired'`.
+
+## Threading (CRITICAL)
+
+- MD5 is computed ONLY in worker threads
+- UI is updated ONLY in main thread
+- Worker → main transition: `root.after(0, callback)`
+- Never call tkinter methods from a worker thread
+
+## Key Implementation Rules
+
+**File paths:** Always `pathlib.Path`, never bare `str`. Use `open(path, 'rb')` for hashing. Fixes Cyrillic and long paths.
+
+**MD5 hashing** (streaming, don't load whole file into memory):
 ```python
-# Правильно — streaming
 hasher = hashlib.md5()
 with open(path, 'rb') as f:
     while chunk := f.read(8192):
@@ -33,55 +62,17 @@ with open(path, 'rb') as f:
 return hasher.hexdigest()
 ```
 
-### Matching Algorithm
-1. Сначала match по `filename` (без пути)
-2. Остаток — по порядку добавления
-3. Файл без пары → status='unpaired'
-
-### Colors
+**Colors:**
 ```python
-COLORS = {
-    'match':    '#d4edda',  # зелёный
-    'diff':     '#f8d7da',  # красный
-    'unpaired': '#e2e3e5',  # серый
-    'pending':  '#ffffff',  # белый
-}
-```
-
-## File Structure
-```
-src/
-├── app.py          # Entry point, AppState, main window
-├── models.py       # FileEntry, FilePair dataclasses
-├── hasher.py       # compute_md5(), hash_file_async()
-├── matcher.py      # compute_pairs()
-└── ui/
-    ├── drop_zone.py    # DropZone widget (tkinterdnd2)
-    ├── pair_row.py     # PairRow widget
-    └── scrollable.py   # ScrollableFrame helper
-```
-
-## Parallel Execution Strategy
-- Запускать тесты параллельно: `pytest tests/ -n auto`
-- Хеширование нескольких файлов — уже параллельно через threading
-- Независимые задачи (hasher.py + matcher.py) можно реализовывать параллельно
-
-## Documentation
-- [PRD](docs/PRD.md) — что строим
-- [Architecture](docs/Architecture.md) — как строим
-- [Specification](docs/Specification.md) — user stories + AC
-- [Pseudocode](docs/Pseudocode.md) — алгоритмы (ЧИТАЙ ПЕРЕД РЕАЛИЗАЦИЕЙ)
-- [Refinement](docs/Refinement.md) — edge cases
-- [test-scenarios](docs/test-scenarios.md) — BDD сценарии
-
-## Build
-```bat
-build.bat
-:: Output: dist/HashDiff.exe
+COLORS = {'match': '#d4edda', 'diff': '#f8d7da', 'unpaired': '#e2e3e5', 'pending': '#ffffff'}
 ```
 
 ## Common Issues
-- DnD не работает → `--collect-data tkinterdnd2` в PyInstaller
-- Кириллика → всегда pathlib.Path
-- DPI размытость → `ctypes.windll.shcore.SetProcessDpiAwareness(1)` в app.py
-- Антивирус → инструкция в README
+
+- DnD broken after PyInstaller → add `--collect-data tkinterdnd2`
+- DPI blur on Windows → `ctypes.windll.shcore.SetProcessDpiAwareness(1)` in `app.py`
+- Antivirus false positive → add `HashDiff.exe` to exclusions
+
+## Documentation
+
+Read before implementing: [Pseudocode](docs/Pseudocode.md) — exact algorithms, [Refinement](docs/Refinement.md) — edge cases, [test-scenarios](docs/test-scenarios.md) — BDD, [insights](docs/insights.md) — known gotchas/solutions.
