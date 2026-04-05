@@ -1,0 +1,8 @@
+customtkinter==5.2.2
+tkinterdnd2==0.3.0
+Pillow==10.3.0
+
+# Dev only
+pyinstaller==6.6.0
+pytest==8.2.0
+pytest-xdist==3.5.0
